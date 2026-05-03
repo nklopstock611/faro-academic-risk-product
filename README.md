@@ -156,16 +156,6 @@ Frontend URL:
 http://localhost:3000
 ```
 
-## Typical usage flow
-
-1. Start the backend.
-2. Start the frontend.
-3. Open `http://localhost:3000`.
-4. Search for a student.
-5. Add courses.
-6. Review the difficulty preview.
-7. Run the final prediction.
-
 ## Example test case
 
 Risk case that should work with the current backend:
