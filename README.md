@@ -166,3 +166,9 @@ Risk case that should work with the current backend:
   - `CRS_00012176`
   - `CRS_00009826`
 - Total credits: `8`
+
+- Student: `EST_00111783`
+- Courses:
+  - `CRS_00000004`
+    - `f796236ab07e0d8f3caa63da7f20aed69a1507ef05464be21be0f808c13cd307`
+- Total credits: `4`
