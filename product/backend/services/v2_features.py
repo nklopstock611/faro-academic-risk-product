@@ -42,10 +42,24 @@ DEFAULT_V2_FEATURES = DEFAULT_BASE_FEATURES + [
     "DIFF_STD",
 ]
 
+DIFFICULTY_LEVEL_LEGEND = {
+    "N3": "Curso con CRN de seccion especifico, que identifica al profesor",
+    "N2": "Curso en general",
+    "N1": "Departamento del curso",
+    "GLOBAL": "Promedio historico global",
+}
+
+
+@dataclass
+class CourseSelection:
+    course_code: str
+    crn: str | None = None
+
 
 @dataclass
 class CourseDifficulty:
     course_code: str
+    crn: str | None
     credits: float
     difficulty_rate: float
     source_level: str
@@ -53,27 +67,29 @@ class CourseDifficulty:
 
 
 class V2FeatureService:
-    """Builds v2 model features from raw backend inputs."""
+    """Builds model features and interpretability payloads from backend inputs."""
 
     def __init__(self, data_dir: Path | None = None):
         self.data_dir = Path(data_dir or BACKEND_DIR / "data")
         self.datasets = load_datasets(str(self.data_dir))
         self.thresholds = dict(DEFAULT_THRESHOLDS)
 
-        self.df_materias = self._get_dataset("materias", "historial_materias", "materias_estudiante")
+        self.df_materias = self._get_dataset("materias", "historial_materias", "materias_estudiante").copy()
         self.df_cursos_profesores = self._get_dataset(
             "cursos_profesores",
             "curso_profesores",
             "historial_cursos_profesores",
-        )
-        self.df_oferta = self._get_dataset("oferta", "oferta_academica")
-
-        self.df_materias = self.df_materias.copy()
-        self.df_cursos_profesores = self.df_cursos_profesores.copy()
-        self.df_oferta = self.df_oferta.copy()
+        ).copy()
+        self.df_oferta = self._get_dataset("oferta", "oferta_academica").copy()
+        self.df_rendimiento = self._get_dataset("rendimiento", "historial_rendimiento", "rendimiento_estudiante").copy()
 
         self.df_materias["PERIODO"] = self.df_materias["PERIODO"].astype(int)
         self.df_cursos_profesores["PERIODO"] = self.df_cursos_profesores["PERIODO"].astype(int)
+        self.df_rendimiento["PERIODO"] = self.df_rendimiento["PERIODO"].astype(int)
+
+        self.df_materias["CODIGO_CURSO"] = self.df_materias["CODIGO_CURSO"].astype(str)
+        self.df_cursos_profesores["CODIGO_CURSO"] = self.df_cursos_profesores["CODIGO_CURSO"].astype(str)
+        self.df_oferta["CODIGO_CURSO"] = self.df_oferta["CODIGO_CURSO"].astype(str)
 
         self.course_to_credits = self._build_course_to_credits()
         self.course_to_department = self._build_course_to_department()
@@ -89,6 +105,63 @@ class V2FeatureService:
                 return self.datasets[key]
         known_keys = ", ".join(sorted(self.datasets.keys()))
         raise KeyError(f"Dataset not found. Tried {keys}. Available: {known_keys}")
+
+    def _normalize_optional_text(self, value: Any) -> str | None:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _normalize_id_repr(self, value: Any) -> str | None:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        if isinstance(value, (bytes, bytearray)):
+            return value.hex()
+        text = str(value).strip()
+        return text or None
+
+    def _normalize_course_selections(
+        self,
+        courses: list[str | dict[str, Any] | CourseSelection],
+    ) -> list[CourseSelection]:
+        normalized: list[CourseSelection] = []
+        for item in courses:
+            if isinstance(item, CourseSelection):
+                normalized.append(
+                    CourseSelection(
+                        course_code=str(item.course_code).strip(),
+                        crn=self._normalize_optional_text(item.crn),
+                    )
+                )
+                continue
+
+            if isinstance(item, str):
+                normalized.append(CourseSelection(course_code=item.strip(), crn=None))
+                continue
+
+            if hasattr(item, "course_code"):
+                normalized.append(
+                    CourseSelection(
+                        course_code=str(getattr(item, "course_code")).strip(),
+                        crn=self._normalize_optional_text(getattr(item, "crn", None)),
+                    )
+                )
+                continue
+
+            course_code = str(item.get("course_code", "")).strip()
+            if not course_code:
+                raise ValueError("Each course selection must include course_code")
+            normalized.append(
+                CourseSelection(
+                    course_code=course_code,
+                    crn=self._normalize_optional_text(item.get("crn")),
+                )
+            )
+
+        if not normalized:
+            raise ValueError("At least one course must be provided")
+
+        return normalized
 
     def _build_course_to_credits(self) -> dict[str, float]:
         if "NUMERO_CREDITOS" in self.df_materias.columns:
@@ -119,15 +192,14 @@ class V2FeatureService:
             for _, row in dept_df.iterrows()
         }
 
-    def _build_crn_to_professor(self) -> dict[Any, Any]:
-        crn_df = (
-            self.df_cursos_profesores[["ID_CRN", "LOGIN_DOCENTE"]]
-            .drop_duplicates(subset=["ID_CRN"], keep="first")
-            .dropna(subset=["ID_CRN"])
-        )
+    def _build_crn_to_professor(self) -> dict[str, Any]:
+        crn_df = self.df_cursos_profesores[["ID_CRN", "LOGIN_DOCENTE"]].dropna(subset=["ID_CRN"]).copy()
+        crn_df["CRN_KEY"] = crn_df["ID_CRN"].map(self._normalize_id_repr)
+        crn_df = crn_df.drop_duplicates(subset=["CRN_KEY"], keep="first")
         return {
-            row["ID_CRN"]: row["LOGIN_DOCENTE"]
+            row["CRN_KEY"]: row["LOGIN_DOCENTE"]
             for _, row in crn_df.iterrows()
+            if row["CRN_KEY"] is not None
         }
 
     def get_base_features(self, student_id: str, overrides: dict[str, Any] | None = None) -> dict[str, float]:
@@ -169,7 +241,10 @@ class V2FeatureService:
             return int(period)
         return int(self.latest_period) + 1
 
-    def _compute_rates_for_period(self, period: int) -> tuple[dict[Any, float], dict[Any, float], dict[Any, float], float]:
+    def _compute_rates_for_period(
+        self,
+        period: int,
+    ) -> tuple[dict[Any, float], dict[Any, float], dict[Any, float], float]:
         period_int = self._resolve_period(period)
         df_prior = self.df_cursos_profesores[self.df_cursos_profesores["PERIODO"] < period_int]
         if df_prior.empty:
@@ -191,9 +266,14 @@ class V2FeatureService:
         }
         return normalized_n3, normalized_n2, normalized_n1, float(global_rate)
 
+    def _resolve_professor_for_selection(self, selection: CourseSelection) -> str | None:
+        if not selection.crn:
+            return None
+        return self.crn_to_professor.get(selection.crn)
+
     def calculate_course_difficulties(
         self,
-        course_codes: list[str],
+        course_selections: list[CourseSelection],
         period: int | None = None,
         professors_by_course: dict[str, str] | None = None,
         credits_by_course: dict[str, float] | None = None,
@@ -201,11 +281,13 @@ class V2FeatureService:
         rates_n3, rates_n2, rates_n1, global_rate = self._compute_rates_for_period(period or self.latest_period + 1)
         difficulties: list[CourseDifficulty] = []
 
-        for course_code in course_codes:
-            course_key = str(course_code)
+        for selection in course_selections:
+            course_key = str(selection.course_code)
             professor = None
             if professors_by_course:
                 professor = professors_by_course.get(course_key)
+            if professor is None:
+                professor = self._resolve_professor_for_selection(selection)
 
             difficulty_rate = None
             source_level = "GLOBAL"
@@ -245,6 +327,7 @@ class V2FeatureService:
             difficulties.append(
                 CourseDifficulty(
                     course_code=course_key,
+                    crn=selection.crn,
                     credits=credits,
                     difficulty_rate=float(difficulty_rate),
                     source_level=source_level,
@@ -274,27 +357,192 @@ class V2FeatureService:
             "DIFF_STD": diff_std,
         }
 
+    def _build_match_summary(self, matches: pd.DataFrame, match_scope: str, requested_with_sections: bool) -> dict[str, Any]:
+        approved_distribution = self._build_approved_pct_distribution(matches)
+        return {
+            "match_scope": match_scope,
+            "requested_with_sections": requested_with_sections,
+            "matches_found": int(len(matches)),
+            "avg_semester_credits": (
+                None if matches.empty else float(matches["CREDITOS_SEMESTRE"].dropna().mean())
+            ),
+            "avg_semester_gpa": (
+                None if matches.empty else float(matches["PROMEDIO_SEMESTRAL"].dropna().mean())
+            ),
+            "median_semester_gpa": (
+                None if matches.empty else float(matches["PROMEDIO_SEMESTRAL"].dropna().median())
+            ),
+            "avg_approved_pct": (
+                None if matches.empty else float(matches["PORCENTAJE_CREDITOS_APROBADOS_SEMESTRE"].dropna().mean())
+            ),
+            "avg_cumulative_gpa": (
+                None if matches.empty else float(matches["PGA"].dropna().mean())
+            ),
+            "approved_pct_distribution": approved_distribution,
+        }
+
+    def _build_approved_pct_distribution(self, matches: pd.DataFrame) -> list[dict[str, Any]]:
+        bins = [
+            ("0-20%", 0.0, 0.2),
+            ("20-40%", 0.2, 0.4),
+            ("40-60%", 0.4, 0.6),
+            ("60-80%", 0.6, 0.8),
+            ("80-100%", 0.8, 1.000001),
+        ]
+        values = matches["PORCENTAJE_CREDITOS_APROBADOS_SEMESTRE"].dropna()
+        distribution: list[dict[str, Any]] = []
+        for label, start, end in bins:
+            count = int(((values >= start) & (values < end)).sum())
+            distribution.append({
+                "label": label,
+                "count": count,
+            })
+        return distribution
+
+    def get_historical_combination_summary(
+        self,
+        course_selections: list[CourseSelection],
+        period: int | None = None,
+    ) -> dict[str, Any]:
+        resolved_period = self._resolve_period(period)
+        selected_codes = sorted({selection.course_code for selection in course_selections})
+        course_signature = "|".join(selected_codes)
+        semester_courses = self.df_materias[
+            self.df_materias["CODIGO_CURSO"].isin(selected_codes)
+            & (self.df_materias["PERIODO"] < resolved_period)
+        ][["ID_PERSONA", "PERIODO", "CODIGO_CURSO", "SECCION", "ID_CRN"]].copy()
+        semester_courses["SECTION_KEY"] = semester_courses["SECCION"].map(self._normalize_optional_text)
+        semester_courses["CRN_KEY"] = semester_courses["ID_CRN"].map(self._normalize_id_repr)
+
+        grouped = (
+            semester_courses.groupby(["ID_PERSONA", "PERIODO"], sort=False)
+            .agg(
+                COURSE_CODES=("CODIGO_CURSO", lambda values: tuple(sorted({str(value) for value in values}))),
+                SECTION_PAIR_SET=(
+                    "SECCION",
+                    lambda _: set(),
+                ),
+                CRN_PAIR_SET=(
+                    "ID_CRN",
+                    lambda _: set(),
+                ),
+            )
+            .reset_index()
+        )
+
+        pair_summary = (
+            semester_courses.groupby(["ID_PERSONA", "PERIODO"], sort=False)
+            .apply(
+                lambda frame: pd.Series(
+                    {
+                        "SECTION_PAIR_SET": {
+                            f"{row.CODIGO_CURSO}::{row.SECTION_KEY}"
+                            for row in frame.itertuples()
+                            if row.SECTION_KEY
+                        },
+                        "CRN_PAIR_SET": {
+                            f"{row.CODIGO_CURSO}::{row.CRN_KEY}"
+                            for row in frame.itertuples()
+                            if row.CRN_KEY
+                        },
+                    }
+                )
+            )
+            .reset_index()
+        )
+
+        grouped = grouped.drop(columns=["SECTION_PAIR_SET", "CRN_PAIR_SET"]).merge(
+            pair_summary,
+            on=["ID_PERSONA", "PERIODO"],
+            how="left",
+        )
+        grouped["COURSE_SIGNATURE"] = grouped["COURSE_CODES"].map(lambda values: "|".join(values))
+        course_matches = grouped[grouped["COURSE_SIGNATURE"] == course_signature]
+
+        outcome_cols = [
+            "ID_PERSONA",
+            "PERIODO",
+            "PROMEDIO_SEMESTRAL",
+            "PORCENTAJE_CREDITOS_APROBADOS_SEMESTRE",
+            "CREDITOS_APROBADOS_SEMESTRE",
+            "CREDITOS_REPROBADOS_SEMESTRE",
+            "CREDITOS_INCOMPLETOS_SEMESTRE",
+            "CREDITOS_RETIRADOS_SEMESTRE",
+            "CREDITOS_PENDIENTES_SEMESTRE",
+            "CREDITOS_HOMOLOGADOS_SEMESTRE",
+            "PGA",
+        ]
+        course_matches = course_matches.merge(
+            self.df_rendimiento[outcome_cols],
+            on=["ID_PERSONA", "PERIODO"],
+            how="left",
+        )
+        course_matches["CREDITOS_SEMESTRE"] = course_matches[
+            [
+                "CREDITOS_APROBADOS_SEMESTRE",
+                "CREDITOS_REPROBADOS_SEMESTRE",
+                "CREDITOS_INCOMPLETOS_SEMESTRE",
+                "CREDITOS_RETIRADOS_SEMESTRE",
+                "CREDITOS_PENDIENTES_SEMESTRE",
+                "CREDITOS_HOMOLOGADOS_SEMESTRE",
+            ]
+        ].sum(axis=1, min_count=1)
+
+        section_summary = None
+        requested_section_pairs = {
+            f"{selection.course_code}::{selection.crn}"
+            for selection in course_selections
+            if selection.crn
+        }
+        if requested_section_pairs:
+            section_matches = course_matches[
+                course_matches.apply(
+                    lambda row: requested_section_pairs.issubset(row["SECTION_PAIR_SET"])
+                    or requested_section_pairs.issubset(row["CRN_PAIR_SET"]),
+                    axis=1,
+                )
+            ]
+            section_summary = self._build_match_summary(
+                section_matches,
+                match_scope="section",
+                requested_with_sections=True,
+            )
+
+        course_summary = self._build_match_summary(
+            course_matches,
+            match_scope="course",
+            requested_with_sections=bool(requested_section_pairs),
+        )
+
+        return {
+            "section_match": section_summary,
+            "course_match": course_summary,
+        }
+
     def build_feature_vector(
         self,
         student_id: str,
-        course_codes: list[str],
+        course_codes: list[str | dict[str, Any] | CourseSelection],
         period: int | None = None,
         total_credits: float | None = None,
         professors_by_course: dict[str, str] | None = None,
         credits_by_course: dict[str, float] | None = None,
         base_feature_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if not course_codes:
-            raise ValueError("At least one course must be provided")
+        course_selections = self._normalize_course_selections(course_codes)
 
         base_features = self.get_base_features(student_id, overrides=base_feature_overrides)
         difficulties = self.calculate_course_difficulties(
-            course_codes=course_codes,
+            course_selections=course_selections,
             period=period,
             professors_by_course=professors_by_course,
             credits_by_course=credits_by_course,
         )
         difficulty_features = self.aggregate_difficulty_features(difficulties)
+        historical_combination_summary = self.get_historical_combination_summary(
+            course_selections,
+            period=period,
+        )
 
         inferred_total_credits = float(sum(item.credits for item in difficulties))
         feature_values = {
@@ -308,6 +556,7 @@ class V2FeatureService:
         difficulty_payload = [
             {
                 "course_code": item.course_code,
+                "crn": item.crn,
                 "credits": item.credits,
                 "difficulty_rate": item.difficulty_rate,
                 "source_level": item.source_level,
@@ -319,10 +568,19 @@ class V2FeatureService:
         return {
             "student_id": student_id,
             "period": self._resolve_period(period),
+            "course_selection": [
+                {
+                    "course_code": selection.course_code,
+                    "crn": selection.crn,
+                }
+                for selection in course_selections
+            ],
             "feature_values": feature_values,
             "feature_order": list(self.v2_feature_cols),
             "feature_vector": ordered_values,
             "difficulty_courses": difficulty_payload,
+            "difficulty_level_legend": dict(DIFFICULTY_LEVEL_LEGEND),
+            "historical_combination_summary": historical_combination_summary,
         }
 
 

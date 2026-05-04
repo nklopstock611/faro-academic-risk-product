@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Alert, Badge, Button, Card, Col, Row, Spinner } from 'react-bootstrap';
 
 import { predict } from '@/lib/api';
-import { PredictionResponse } from '@/lib/types';
+import { HistoricalMatchSummary, PredictionResponse } from '@/lib/types';
 
 function difficultyLabel(rate: number) {
   if (rate < 0.75) {
@@ -15,6 +15,87 @@ function difficultyLabel(rate: number) {
     return 'Dificultad media';
   }
   return 'Baja dificultad';
+}
+
+function loadVariationLabel(std: number) {
+  if (std < 0.08) {
+    return 'Carga pareja';
+  }
+  if (std < 0.18) {
+    return 'Carga mixta';
+  }
+  return 'Carga dispareja';
+}
+
+function formatPercent(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return 'Sin dato';
+  }
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatNumber(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return 'Sin dato';
+  }
+  return value.toFixed(2);
+}
+
+function supportTitle(summary: HistoricalMatchSummary | null | undefined) {
+  if (!summary) {
+    return 'Sin coincidencias';
+  }
+  return `${summary.matches_found} casos históricos`;
+}
+
+function HistoricalDistributionCard({
+  title,
+  summary,
+}: {
+  title: string;
+  summary: HistoricalMatchSummary | null | undefined;
+}) {
+  const distribution = summary?.approved_pct_distribution ?? [];
+  const maxCount = Math.max(1, ...distribution.map((bin) => bin.count));
+
+  return (
+    <Card className="h-100 shadow-sm">
+      <Card.Body>
+        <div className="text-muted small mb-2">{title}</div>
+        <Row className="g-4 align-items-start">
+          <Col md={5}>
+            <div className="h4 mb-3">{supportTitle(summary)}</div>
+            <div className="small text-muted mb-3">
+              GPA semestral promedio: <strong>{formatNumber(summary?.avg_semester_gpa)}</strong>
+            </div>
+            <div className="small text-muted mb-3">
+              Carga semestral promedio: <strong>{formatNumber(summary?.avg_semester_credits)} créditos</strong>
+            </div>
+            <div className="small text-muted mb-0">
+              % promedio de créditos aprobados: <strong>{formatPercent(summary?.avg_approved_pct)}</strong>
+            </div>
+          </Col>
+          <Col md={7}>
+            <div className="small fw-semibold mb-2">Distribución de % de créditos aprobados</div>
+            <div className="d-flex flex-column gap-2">
+              {distribution.map((bin) => (
+                <div key={bin.label} className="d-flex align-items-center gap-2">
+                  <div style={{ width: '64px' }} className="small text-muted">{bin.label}</div>
+                  <div className="flex-grow-1 bg-light rounded" style={{ height: '12px', overflow: 'hidden' }}>
+                    <div
+                      className="bg-primary h-100"
+                      style={{ width: `${(bin.count / maxCount) * 100}%`, minWidth: bin.count > 0 ? '6px' : '0' }}
+                    />
+                  </div>
+                  <div style={{ width: '28px' }} className="small text-end">{bin.count}</div>
+                </div>
+              ))}
+            </div>
+          </Col>
+        </Row>
+      </Card.Body>
+    </Card>
+  );
 }
 
 export default function ResultsPage() {
@@ -69,9 +150,10 @@ export default function ResultsPage() {
   }
 
   const scorePercent = (result.score * 100).toFixed(1);
+  const hasSectionMatches = (result.historical_combination_summary.section_match?.matches_found ?? 0) > 0;
 
   return (
-    <main className="container py-5" style={{ maxWidth: '960px' }}>
+    <main className="container py-5" style={{ maxWidth: '1040px' }}>
       <div className="d-flex justify-content-between align-items-center mb-4">
         <Button variant="outline-secondary" onClick={() => router.push('/')}>
           {'<-'} Volver
@@ -106,7 +188,9 @@ export default function ResultsPage() {
             <Card.Body>
               <div className="text-muted small mb-2">Curso más exigente</div>
               <div className="h3">{result.summary.hardest_course}</div>
-              <p className="mb-0 text-muted">Es el curso con la menor tasa histórica de aprobación dentro de tu selección.</p>
+              <p className="mb-0 text-muted">
+                Con una tasa histórica de aprobación de {(result.summary.hardest_course_difficulty * 100).toFixed(1)}%.
+              </p>
             </Card.Body>
           </Card>
         </Col>
@@ -114,66 +198,29 @@ export default function ResultsPage() {
           <Card className="h-100 shadow-sm">
             <Card.Body>
               <div className="text-muted small mb-2">Variedad de exigencia</div>
-              <div className="h3">
-                {result.summary.difficulty_std < 0.08
-                  ? 'Carga pareja'
-                  : result.summary.difficulty_std < 0.18
-                    ? 'Carga mixta'
-                    : 'Carga dispareja'}
-              </div>
-              <p className="mb-0 text-muted">Resume qué tan similares son entre sí los cursos que piensas inscribir.</p>
+              <div className="h3">{loadVariationLabel(result.summary.difficulty_std)}</div>
+              <p className="mb-0 text-muted">Resume qué tan similares son entre sí los cursos seleccionados.</p>
             </Card.Body>
           </Card>
         </Col>
       </Row>
 
-      {/*
-      <Card className="shadow-sm mb-4">
-        <Card.Header className="bg-light fw-bold">Dificultad por curso</Card.Header>
-        <Card.Body>
-          <p className="text-muted mb-3">
-            La dificultad se estima con la tasa histórica de aprobación del curso. Una tasa más baja implica un curso más exigente.
-          </p>
-          <div className="table-responsive">
-            <table className="table align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>Curso</th>
-                  <th>Créditos</th>
-                  <th>Tasa</th>
-                  <th>Lectura</th>
-                  <th>Nivel</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.difficulty_courses.map((course) => (
-                  <tr key={course.course_code}>
-                    <td><code>{course.course_code}</code></td>
-                    <td>{course.credits}</td>
-                    <td>{(course.difficulty_rate * 100).toFixed(1)}%</td>
-                    <td>{difficultyLabel(course.difficulty_rate)}</td>
-                    <td>
-                      <Badge bg={levelBadgeVariant(course.source_level)}>
-                        {course.source_level}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card.Body>
-      </Card>
-      */}
-
-      {/*
-      <Card className="shadow-sm">
-        <Card.Header className="bg-light fw-bold">Feature values</Card.Header>
-        <Card.Body>
-          <pre className="mb-0">{JSON.stringify(result.feature_values, null, 2)}</pre>
-        </Card.Body>
-      </Card>
-      */}
+      <Row className="g-3 mb-4">
+        <Col md={hasSectionMatches ? 6 : 12}>
+          <HistoricalDistributionCard
+            title={hasSectionMatches ? 'Histórico del curso (todas las secciones)' : 'Histórico del curso'}
+            summary={result.historical_combination_summary.course_match}
+          />
+        </Col>
+        {hasSectionMatches && (
+          <Col md={6}>
+            <HistoricalDistributionCard
+              title="Histórico por CRN de secciones"
+              summary={result.historical_combination_summary.section_match}
+            />
+          </Col>
+        )}
+      </Row>
     </main>
   );
 }

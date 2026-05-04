@@ -45,8 +45,9 @@ def preview_difficulty(request: DifficultyPreviewRequest):
     return DifficultyPreviewResponse(
         estudiante_id=request.estudiante_id,
         periodo=feature_bundle["period"],
-        total_courses=len(request.cursos),
+        total_courses=len(feature_bundle["course_selection"]),
         total_credits=float(sum(course["credits"] for course in difficulty_courses)),
+        course_selection=feature_bundle["course_selection"],
         difficulty_courses=[
             DifficultyCourseResponse(**course)
             for course in difficulty_courses
@@ -56,6 +57,8 @@ def preview_difficulty(request: DifficultyPreviewRequest):
             "DIFF_MIN": float(feature_values["DIFF_MIN"]),
             "DIFF_STD": float(feature_values["DIFF_STD"]),
         },
+        difficulty_level_legend=feature_bundle["difficulty_level_legend"],
+        historical_combination_summary=feature_bundle["historical_combination_summary"],
     )
 
 
@@ -101,6 +104,7 @@ def predecir_v2(request: V2PredictionRequest):
             key: float(value)
             for key, value in feature_bundle["feature_values"].items()
         },
+        course_selection=feature_bundle["course_selection"],
         difficulty_courses=[
             DifficultyCourseResponse(**course)
             for course in difficulty_courses
@@ -109,6 +113,8 @@ def predecir_v2(request: V2PredictionRequest):
             str(course["course_code"]): str(course["source_level"])
             for course in difficulty_courses
         },
+        difficulty_level_legend=feature_bundle["difficulty_level_legend"],
+        historical_combination_summary=feature_bundle["historical_combination_summary"],
         summary={
             "risk_label": risk_label,
             "message": (
@@ -116,7 +122,7 @@ def predecir_v2(request: V2PredictionRequest):
                 if prediction["at_risk"]
                 else "Prediccion de exito esperada"
             ),
-            "total_courses": len(request.cursos),
+            "total_courses": len(feature_bundle["course_selection"]),
             "total_credits": float(
                 request.creditos
                 if request.creditos is not None

@@ -11,15 +11,15 @@ import {
   Form,
   InputGroup,
   ListGroup,
+  Modal,
   Row,
   Spinner,
 } from 'react-bootstrap';
 
 import { getStudent, previewDifficulty } from '@/lib/api';
-import { DifficultyCourse, DifficultyPreviewResponse } from '@/lib/types';
+import { CourseSelection, DifficultyPreviewResponse } from '@/lib/types';
 
-interface CourseWithCredits {
-  code: string;
+interface CourseWithCredits extends CourseSelection {
   credits: number;
 }
 
@@ -33,24 +33,14 @@ function formatDifficultyLabel(rate: number) {
   return { title: 'Baja dificultad', text: 'Tiene una tasa histórica de aprobación alta.' };
 }
 
-function formatLoadVariation(std: number) {
-  if (std < 0.08) {
-    return { title: 'Carga pareja', text: 'Los cursos tienen una exigencia parecida entre sí.' };
-  }
-  if (std < 0.18) {
-    return { title: 'Carga mixta', text: 'Hay una mezcla moderada de cursos más suaves y más exigentes.' };
-  }
-  return { title: 'Carga dispareja', text: 'Hay diferencias fuertes de exigencia entre cursos.' };
-}
-
 function levelLabel(level: string) {
   switch (level) {
     case 'N3':
-      return 'N3';
+      return 'N3 (curso + profesor)';
     case 'N2':
-      return 'N2';
+      return 'N2 (curso)';
     case 'N1':
-      return 'N1';
+      return 'N1 (departamento)';
     default:
       return 'GLOBAL';
   }
@@ -76,6 +66,7 @@ export default function Home() {
   const [selectedCourses, setSelectedCourses] = useState<CourseWithCredits[]>([]);
   const [maxCredits, setMaxCredits] = useState<number | null>(20);
   const [preview, setPreview] = useState<DifficultyPreviewResponse | null>(null);
+  const [showDifficultyHelp, setShowDifficultyHelp] = useState(false);
 
   const [loadingStudent, setLoadingStudent] = useState(false);
   const [loadingCourse, setLoadingCourse] = useState(false);
@@ -158,18 +149,15 @@ export default function Home() {
         return;
       }
 
-      if (!confirmedStudent || selectedCourses.length === 0) {
-        setPreview(null);
-        setPreviewError('');
-        return;
-      }
-
       try {
         setLoadingPreview(true);
         setPreviewError('');
         const data = await previewDifficulty({
           estudiante_id: confirmedStudent,
-          cursos: selectedCourses.map((course) => course.code),
+          cursos: selectedCourses.map((course) => ({
+            course_code: course.course_code,
+            crn: course.crn || undefined,
+          })),
           periodo: selectedPeriod ?? undefined,
         });
         if (cancelled || requestId !== previewRequestIdRef.current) {
@@ -250,8 +238,8 @@ export default function Home() {
     const idToSearch = (courseId || courseInput).trim();
     if (!idToSearch) return;
 
-    if (selectedCourses.some((course) => course.code === idToSearch)) {
-      setMsg({ type: 'warning', text: 'Ese curso ya está agregado.' });
+    if (selectedCourses.some((course) => course.course_code === idToSearch)) {
+      setMsg({ type: 'warning', text: 'Ese curso ya esta agregado.' });
       return;
     }
 
@@ -282,7 +270,7 @@ export default function Home() {
         return;
       }
 
-      setSelectedCourses((prev) => [...prev, { code: idToSearch, credits }]);
+      setSelectedCourses((prev) => [...prev, { course_code: idToSearch, credits, crn: '' }]);
       setCourseInput('');
       setShowCourseDropdown(false);
     } finally {
@@ -290,8 +278,18 @@ export default function Home() {
     }
   };
 
-  const removeCourse = (code: string) => {
-    setSelectedCourses((prev) => prev.filter((course) => course.code !== code));
+  const updateCourseCrn = (courseCode: string, value: string) => {
+    setSelectedCourses((prev) =>
+      prev.map((course) =>
+        course.course_code === courseCode
+          ? { ...course, crn: value }
+          : course,
+      ),
+    );
+  };
+
+  const removeCourse = (courseCode: string) => {
+    setSelectedCourses((prev) => prev.filter((course) => course.course_code !== courseCode));
   };
 
   const handleSubmit = () => {
@@ -299,7 +297,10 @@ export default function Home() {
 
     const payload = {
       estudiante_id: confirmedStudent,
-      cursos: selectedCourses.map((course) => course.code),
+      cursos: selectedCourses.map((course) => ({
+        course_code: course.course_code,
+        crn: course.crn?.trim() ? course.crn.trim() : undefined,
+      })),
       creditos: totalCredits,
       periodo: selectedPeriod ?? undefined,
       pga_anterior: parseFloat(pgaAnterior),
@@ -311,23 +312,8 @@ export default function Home() {
     router.push('/results');
   };
 
-  const averageDifficulty = preview?.semester_aggregates.DIFF_MEAN_WEIGHTED ?? null;
-  const minDifficulty = preview?.semester_aggregates.DIFF_MIN ?? null;
-  const stdDifficulty = preview?.semester_aggregates.DIFF_STD ?? null;
-
-  const averageLabel = averageDifficulty !== null ? formatDifficultyLabel(averageDifficulty) : null;
-  const hardestLabel = minDifficulty !== null ? formatDifficultyLabel(minDifficulty) : null;
-  const variationLabel = stdDifficulty !== null ? formatLoadVariation(stdDifficulty) : null;
-
-  const hardestCourse = preview?.difficulty_courses.reduce<DifficultyCourse | null>((hardest, course) => {
-    if (!hardest || course.difficulty_rate < hardest.difficulty_rate) {
-      return course;
-    }
-    return hardest;
-  }, null);
-
   return (
-    <main className="container py-5" style={{ maxWidth: '960px' }}>
+    <main className="container py-5" style={{ maxWidth: '1040px' }}>
       <div className="mb-4 text-center">
         <h1 className="display-5 fw-bold text-primary">Predictor académico</h1>
         <p className="text-muted mb-0">Selecciona un estudiante, define su carga y revisa el impacto esperado de los cursos.</p>
@@ -436,19 +422,37 @@ export default function Home() {
           </div>
 
           <div className="p-3 border rounded bg-light">
-            <div className="d-flex flex-wrap gap-2">
-              {selectedCourses.length === 0 && (
-                <span className="text-muted">Aún no has agregado cursos.</span>
-              )}
-              {selectedCourses.map((course) => (
-                <Badge bg="success" key={course.code} className="p-2">
-                  {course.code} ({course.credits} créditos)
-                  <span className="ms-2" style={{ cursor: 'pointer' }} onClick={() => removeCourse(course.code)}>
-                    ×
-                  </span>
-                </Badge>
-              ))}
-            </div>
+            {selectedCourses.length === 0 && (
+              <span className="text-muted">Aun no has agregado cursos.</span>
+            )}
+
+            {selectedCourses.length > 0 && (
+              <div className="d-flex flex-column gap-3">
+                {selectedCourses.map((course) => (
+                  <div key={course.course_code} className="border rounded p-3 bg-white">
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <div className="d-flex gap-2 align-items-center flex-wrap">
+                        <Badge bg="success">{course.course_code}</Badge>
+                        <span className="text-muted">{course.credits} créditos</span>
+                      </div>
+                      <Button variant="outline-danger" size="sm" onClick={() => removeCourse(course.course_code)}>
+                        Quitar
+                      </Button>
+                    </div>
+                    <Form.Label className="small text-muted mb-1">CRN de la sección (opcional)</Form.Label>
+                    <Form.Control
+                      placeholder="Ej: 12345"
+                      value={course.crn ?? ''}
+                      onChange={(e) => updateCourseCrn(course.course_code, e.target.value)}
+                    />
+                    <div className="small text-muted mt-1">
+                      Si indicas el CRN, la dificultad puede calcularse al nivel mas especifico del curso.
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="mt-3 text-end text-muted">
               {totalCredits} / {maxCredits ?? 20} créditos
             </div>
@@ -458,7 +462,12 @@ export default function Home() {
 
       <section className="mb-4">
         <div className="d-flex justify-content-between align-items-center mb-3">
-          <h2 className="h4 mb-0">Vista previa de dificultad</h2>
+          <div className="d-flex align-items-center gap-2">
+            <h2 className="h4 mb-0">Vista previa de dificultad</h2>
+            <Button variant="outline-secondary" size="sm" onClick={() => setShowDifficultyHelp(true)}>
+              ?
+            </Button>
+          </div>
           {loadingPreview && <Spinner animation="border" size="sm" />}
         </div>
 
@@ -468,50 +477,16 @@ export default function Home() {
           <Alert variant="light">Agrega al menos un curso para ver cómo cambia la dificultad del semestre.</Alert>
         )}
 
-        {preview && averageLabel && hardestLabel && variationLabel && (
+        {preview && (
           <>
-            <Row className="g-3 mb-3">
-              <Col md={4}>
-                <Card className="h-100 shadow-sm">
-                  <Card.Body>
-                    <div className="text-muted small mb-2">Dificultad promedio del semestre</div>
-                    <div className="h5">{averageLabel.title}</div>
-                    <p className="mb-0 text-muted">{averageLabel.text}</p>
-                  </Card.Body>
-                </Card>
-              </Col>
-              <Col md={4}>
-                <Card className="h-100 shadow-sm">
-                  <Card.Body>
-                    <div className="text-muted small mb-2">Curso más exigente</div>
-                    <div className="h5">{hardestCourse?.course_code ?? 'Sin dato'}</div>
-                    {/* <div className="h3">{hardestLabel.title}</div> */}
-                    <p className="mb-0 text-muted">
-                      {hardestCourse
-                        ? `Con una tasa histórica de aprobación de ${(hardestCourse.difficulty_rate * 100).toFixed(1)}%.`
-                        : hardestLabel.text}
-                    </p>
-                  </Card.Body>
-                </Card>
-              </Col>
-              <Col md={4}>
-                <Card className="h-100 shadow-sm">
-                  <Card.Body>
-                    <div className="text-muted small mb-2">Variedad de exigencia</div>
-                    <div className="h5">{variationLabel.title}</div>
-                    <p className="mb-0 text-muted">{variationLabel.text}</p>
-                  </Card.Body>
-                </Card>
-              </Col>
-            </Row>
-
-            <Card className="shadow-sm">
+            <Card className="shadow-sm mb-3">
               <Card.Body>
                 <div className="table-responsive">
                   <table className="table align-middle mb-0">
                     <thead>
                       <tr>
                         <th>Curso</th>
+                        <th>CRN de sección</th>
                         <th>Créditos</th>
                         <th>Tasa</th>
                         <th>Lectura</th>
@@ -520,8 +495,9 @@ export default function Home() {
                     </thead>
                     <tbody>
                       {preview.difficulty_courses.map((course) => (
-                        <tr key={course.course_code}>
+                        <tr key={`${course.course_code}-${course.crn ?? 'base'}`}>
                           <td><code>{course.course_code}</code></td>
+                          <td>{course.crn || 'No especificado'}</td>
                           <td>{course.credits}</td>
                           <td>{(course.difficulty_rate * 100).toFixed(1)}%</td>
                           <td>{formatDifficultyLabel(course.difficulty_rate).title}</td>
@@ -531,6 +507,19 @@ export default function Home() {
                     </tbody>
                   </table>
                 </div>
+              </Card.Body>
+            </Card>
+
+            <Card className="shadow-sm">
+              <Card.Body>
+                <div className="fw-bold mb-2">Qué significa cada nivel</div>
+                <ul className="mb-0">
+                  {Object.entries(preview.difficulty_level_legend).map(([level, description]) => (
+                    <li key={level}>
+                      <strong>{level}:</strong> {description}
+                    </li>
+                  ))}
+                </ul>
               </Card.Body>
             </Card>
           </>
@@ -550,9 +539,28 @@ export default function Home() {
             !pctCreditosAnterior
           }
         >
-          Ver predicción
+          Ver prediccion
         </Button>
       </div>
+
+      <Modal show={showDifficultyHelp} onHide={() => setShowDifficultyHelp(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Cómo se calcula la dificultad</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>
+            La dificultad se estima con la tasa histórica de aprobación. Una tasa menor implica un curso más exigente.
+          </p>
+          <p>
+            El sistema intenta usar primero la información más específica disponible: curso con CRN de sección,
+            luego curso, después departamento y, si no hay soporte suficiente, el promedio global.
+          </p>
+          <p className="mb-0">
+            Para el histórico de combinaciones, si indicas el CRN de la sección se intentan encontrar coincidencias a
+            ese nivel. Si no existen, se sigue mostrando el histórico por código de curso.
+          </p>
+        </Modal.Body>
+      </Modal>
     </main>
   );
 }
