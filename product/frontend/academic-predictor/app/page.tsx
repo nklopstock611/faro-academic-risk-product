@@ -333,7 +333,7 @@ export default function Home() {
               <>
                 <InputGroup>
                   <Form.Control
-                    placeholder="Ej: EST_00111783"
+                    placeholder="Código del estudiante"
                     value={studentInput}
                     onChange={(e) => setStudentInput(e.target.value)}
                     autoComplete="off"
@@ -400,7 +400,7 @@ export default function Home() {
             <Form.Label className="fw-bold">Agrega cursos</Form.Label>
             <InputGroup>
               <Form.Control
-                placeholder="Ej: CRS_00017889"
+                placeholder="Código del curso"
                 value={courseInput}
                 onChange={(e) => setCourseInput(e.target.value)}
                 autoComplete="off"
@@ -441,7 +441,7 @@ export default function Home() {
                     </div>
                     <Form.Label className="small text-muted mb-1">Login del docente (opcional)</Form.Label>
                     <Form.Control
-                      placeholder="Ej: jperez"
+                      placeholder="Login del docente"
                       value={course.login_docente ?? ''}
                       onChange={(e) => updateCourseLoginDocente(course.course_code, e.target.value)}
                     />
