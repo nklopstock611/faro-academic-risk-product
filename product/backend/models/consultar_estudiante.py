@@ -1,13 +1,24 @@
 import pandas as pd
 import numpy as np
 import warnings
+import sys
 from pathlib import Path
 warnings.filterwarnings('ignore')
 
-DATA_DIR = Path(__file__).resolve().parents[1] / 'data'
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BACKEND_DIR / 'data'
 
-df_rendimiento = pd.read_parquet(DATA_DIR / 'historial_rendimiento_academico_estudiante_anonymized.parquet')
-df_info_actual = pd.read_parquet(DATA_DIR / 'informacion_actual_estudiante_anonymized.parquet')
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+from helpers.data_loader import resolve_dataset_path
+
+df_rendimiento = pd.read_parquet(resolve_dataset_path(DATA_DIR, 'historial_rendimiento_academico_estudiante'))
+df_info_actual = pd.read_parquet(resolve_dataset_path(DATA_DIR, 'informacion_actual_estudiante'))
+
+# CODIGO_ESTUDIANTE may be int64 in deanonymized parquets and str in
+# anonymized ones — normalize to string so the lookup works in both cases.
+df_rendimiento['CODIGO_ESTUDIANTE'] = df_rendimiento['CODIGO_ESTUDIANTE'].astype(str)
+df_info_actual['CODIGO_ESTUDIANTE'] = df_info_actual['CODIGO_ESTUDIANTE'].astype(str)
 
 df_rendimiento['PERIODO'] = df_rendimiento['PERIODO'].astype(int)
 df_info_actual['PERIODO'] = df_info_actual['PERIODO'].astype(int)
