@@ -94,6 +94,12 @@ class V2FeatureService:
         self.df_cursos_profesores["CODIGO_CURSO"] = self.df_cursos_profesores["CODIGO_CURSO"].astype(str)
         self.df_oferta["CODIGO_CURSO"] = self.df_oferta["CODIGO_CURSO"].astype(str)
 
+        # CODIGO_ESTUDIANTE may be int (deanonymized) or str (anonymized) —
+        # normalize so groupby/merge work consistently with the API string IDs.
+        for df in (self.df_materias, self.df_rendimiento):
+            if "CODIGO_ESTUDIANTE" in df.columns:
+                df["CODIGO_ESTUDIANTE"] = df["CODIGO_ESTUDIANTE"].astype(str)
+
         # Enrich materias with LOGIN_DOCENTE via the stable section key
         # (PERIODO, CODIGO_CURSO, SECCION) so historical lookups never depend
         # on ID_CRN (which is dataset-specific).
