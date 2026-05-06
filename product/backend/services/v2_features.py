@@ -43,23 +43,26 @@ DEFAULT_V2_FEATURES = DEFAULT_BASE_FEATURES + [
 ]
 
 DIFFICULTY_LEVEL_LEGEND = {
-    "N3": "Curso con CRN de seccion especifico, que identifica al profesor",
+    "N3": "Curso con docente especifico (codigo de curso + login del docente)",
     "N2": "Curso en general",
     "N1": "Departamento del curso",
     "GLOBAL": "Promedio historico global",
 }
 
+# Section key used to resolve LOGIN_DOCENTE for historical materias rows.
+SECTION_KEY_COLS = ["PERIODO", "CODIGO_CURSO", "SECCION"]
+
 
 @dataclass
 class CourseSelection:
     course_code: str
-    crn: str | None = None
+    login_docente: str | None = None
 
 
 @dataclass
 class CourseDifficulty:
     course_code: str
-    crn: str | None
+    login_docente: str | None
     credits: float
     difficulty_rate: float
     source_level: str
@@ -91,9 +94,21 @@ class V2FeatureService:
         self.df_cursos_profesores["CODIGO_CURSO"] = self.df_cursos_profesores["CODIGO_CURSO"].astype(str)
         self.df_oferta["CODIGO_CURSO"] = self.df_oferta["CODIGO_CURSO"].astype(str)
 
+        # Enrich materias with LOGIN_DOCENTE via the stable section key
+        # (PERIODO, CODIGO_CURSO, SECCION) so historical lookups never depend
+        # on ID_CRN (which is dataset-specific).
+        if "LOGIN_DOCENTE" not in self.df_materias.columns:
+            prof_lookup = (
+                self.df_cursos_profesores[SECTION_KEY_COLS + ["LOGIN_DOCENTE"]]
+                .dropna(subset=SECTION_KEY_COLS)
+                .drop_duplicates(subset=SECTION_KEY_COLS, keep="first")
+            )
+            self.df_materias = self.df_materias.merge(
+                prof_lookup, on=SECTION_KEY_COLS, how="left",
+            )
+
         self.course_to_credits = self._build_course_to_credits()
         self.course_to_department = self._build_course_to_department()
-        self.crn_to_professor = self._build_crn_to_professor()
         self.latest_period = int(self.df_materias["PERIODO"].max())
 
         self.base_feature_cols = list(globals().get("FEATURE_COLS_BASE", DEFAULT_BASE_FEATURES))
@@ -112,14 +127,6 @@ class V2FeatureService:
         text = str(value).strip()
         return text or None
 
-    def _normalize_id_repr(self, value: Any) -> str | None:
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            return None
-        if isinstance(value, (bytes, bytearray)):
-            return value.hex()
-        text = str(value).strip()
-        return text or None
-
     def _normalize_course_selections(
         self,
         courses: list[str | dict[str, Any] | CourseSelection],
@@ -130,20 +137,20 @@ class V2FeatureService:
                 normalized.append(
                     CourseSelection(
                         course_code=str(item.course_code).strip(),
-                        crn=self._normalize_optional_text(item.crn),
+                        login_docente=self._normalize_optional_text(item.login_docente),
                     )
                 )
                 continue
 
             if isinstance(item, str):
-                normalized.append(CourseSelection(course_code=item.strip(), crn=None))
+                normalized.append(CourseSelection(course_code=item.strip(), login_docente=None))
                 continue
 
             if hasattr(item, "course_code"):
                 normalized.append(
                     CourseSelection(
                         course_code=str(getattr(item, "course_code")).strip(),
-                        crn=self._normalize_optional_text(getattr(item, "crn", None)),
+                        login_docente=self._normalize_optional_text(getattr(item, "login_docente", None)),
                     )
                 )
                 continue
@@ -154,7 +161,7 @@ class V2FeatureService:
             normalized.append(
                 CourseSelection(
                     course_code=course_code,
-                    crn=self._normalize_optional_text(item.get("crn")),
+                    login_docente=self._normalize_optional_text(item.get("login_docente")),
                 )
             )
 
@@ -190,16 +197,6 @@ class V2FeatureService:
         return {
             str(row["CODIGO_CURSO"]): row["CODIGO_DEPARTAMENTO"]
             for _, row in dept_df.iterrows()
-        }
-
-    def _build_crn_to_professor(self) -> dict[str, Any]:
-        crn_df = self.df_cursos_profesores[["ID_CRN", "LOGIN_DOCENTE"]].dropna(subset=["ID_CRN"]).copy()
-        crn_df["CRN_KEY"] = crn_df["ID_CRN"].map(self._normalize_id_repr)
-        crn_df = crn_df.drop_duplicates(subset=["CRN_KEY"], keep="first")
-        return {
-            row["CRN_KEY"]: row["LOGIN_DOCENTE"]
-            for _, row in crn_df.iterrows()
-            if row["CRN_KEY"] is not None
         }
 
     def get_base_features(self, student_id: str, overrides: dict[str, Any] | None = None) -> dict[str, float]:
@@ -266,11 +263,6 @@ class V2FeatureService:
         }
         return normalized_n3, normalized_n2, normalized_n1, float(global_rate)
 
-    def _resolve_professor_for_selection(self, selection: CourseSelection) -> str | None:
-        if not selection.crn:
-            return None
-        return self.crn_to_professor.get(selection.crn)
-
     def calculate_course_difficulties(
         self,
         course_selections: list[CourseSelection],
@@ -287,7 +279,7 @@ class V2FeatureService:
             if professors_by_course:
                 professor = professors_by_course.get(course_key)
             if professor is None:
-                professor = self._resolve_professor_for_selection(selection)
+                professor = selection.login_docente
 
             difficulty_rate = None
             source_level = "GLOBAL"
@@ -327,7 +319,7 @@ class V2FeatureService:
             difficulties.append(
                 CourseDifficulty(
                     course_code=course_key,
-                    crn=selection.crn,
+                    login_docente=selection.login_docente,
                     credits=credits,
                     difficulty_rate=float(difficulty_rate),
                     source_level=source_level,
@@ -407,23 +399,26 @@ class V2FeatureService:
         resolved_period = self._resolve_period(period)
         selected_codes = sorted({selection.course_code for selection in course_selections})
         course_signature = "|".join(selected_codes)
+
+        materias_cols = ["CODIGO_ESTUDIANTE", "PERIODO", "CODIGO_CURSO"]
+        if "LOGIN_DOCENTE" in self.df_materias.columns:
+            materias_cols.append("LOGIN_DOCENTE")
         semester_courses = self.df_materias[
             self.df_materias["CODIGO_CURSO"].isin(selected_codes)
             & (self.df_materias["PERIODO"] < resolved_period)
-        ][["ID_PERSONA", "PERIODO", "CODIGO_CURSO", "SECCION", "ID_CRN"]].copy()
-        semester_courses["SECTION_KEY"] = semester_courses["SECCION"].map(self._normalize_optional_text)
-        semester_courses["CRN_KEY"] = semester_courses["ID_CRN"].map(self._normalize_id_repr)
+        ][materias_cols].copy()
+        if "LOGIN_DOCENTE" not in semester_courses.columns:
+            semester_courses["LOGIN_DOCENTE"] = None
+        semester_courses["PROF_KEY"] = semester_courses["LOGIN_DOCENTE"].map(
+            self._normalize_optional_text
+        )
 
         grouped = (
-            semester_courses.groupby(["ID_PERSONA", "PERIODO"], sort=False)
+            semester_courses.groupby(["CODIGO_ESTUDIANTE", "PERIODO"], sort=False)
             .agg(
                 COURSE_CODES=("CODIGO_CURSO", lambda values: tuple(sorted({str(value) for value in values}))),
-                SECTION_PAIR_SET=(
-                    "SECCION",
-                    lambda _: set(),
-                ),
-                CRN_PAIR_SET=(
-                    "ID_CRN",
+                PROF_PAIR_SET=(
+                    "LOGIN_DOCENTE",
                     lambda _: set(),
                 ),
             )
@@ -431,19 +426,14 @@ class V2FeatureService:
         )
 
         pair_summary = (
-            semester_courses.groupby(["ID_PERSONA", "PERIODO"], sort=False)
+            semester_courses.groupby(["CODIGO_ESTUDIANTE", "PERIODO"], sort=False)
             .apply(
                 lambda frame: pd.Series(
                     {
-                        "SECTION_PAIR_SET": {
-                            f"{row.CODIGO_CURSO}::{row.SECTION_KEY}"
+                        "PROF_PAIR_SET": {
+                            f"{row.CODIGO_CURSO}::{row.PROF_KEY}"
                             for row in frame.itertuples()
-                            if row.SECTION_KEY
-                        },
-                        "CRN_PAIR_SET": {
-                            f"{row.CODIGO_CURSO}::{row.CRN_KEY}"
-                            for row in frame.itertuples()
-                            if row.CRN_KEY
+                            if row.PROF_KEY
                         },
                     }
                 )
@@ -451,16 +441,16 @@ class V2FeatureService:
             .reset_index()
         )
 
-        grouped = grouped.drop(columns=["SECTION_PAIR_SET", "CRN_PAIR_SET"]).merge(
+        grouped = grouped.drop(columns=["PROF_PAIR_SET"]).merge(
             pair_summary,
-            on=["ID_PERSONA", "PERIODO"],
+            on=["CODIGO_ESTUDIANTE", "PERIODO"],
             how="left",
         )
         grouped["COURSE_SIGNATURE"] = grouped["COURSE_CODES"].map(lambda values: "|".join(values))
         course_matches = grouped[grouped["COURSE_SIGNATURE"] == course_signature]
 
         outcome_cols = [
-            "ID_PERSONA",
+            "CODIGO_ESTUDIANTE",
             "PERIODO",
             "PROMEDIO_SEMESTRAL",
             "PORCENTAJE_CREDITOS_APROBADOS_SEMESTRE",
@@ -474,7 +464,7 @@ class V2FeatureService:
         ]
         course_matches = course_matches.merge(
             self.df_rendimiento[outcome_cols],
-            on=["ID_PERSONA", "PERIODO"],
+            on=["CODIGO_ESTUDIANTE", "PERIODO"],
             how="left",
         )
         course_matches["CREDITOS_SEMESTRE"] = course_matches[
@@ -489,16 +479,15 @@ class V2FeatureService:
         ].sum(axis=1, min_count=1)
 
         section_summary = None
-        requested_section_pairs = {
-            f"{selection.course_code}::{selection.crn}"
+        requested_prof_pairs = {
+            f"{selection.course_code}::{selection.login_docente}"
             for selection in course_selections
-            if selection.crn
+            if selection.login_docente
         }
-        if requested_section_pairs:
+        if requested_prof_pairs:
             section_matches = course_matches[
                 course_matches.apply(
-                    lambda row: requested_section_pairs.issubset(row["SECTION_PAIR_SET"])
-                    or requested_section_pairs.issubset(row["CRN_PAIR_SET"]),
+                    lambda row: requested_prof_pairs.issubset(row["PROF_PAIR_SET"]),
                     axis=1,
                 )
             ]
@@ -511,7 +500,7 @@ class V2FeatureService:
         course_summary = self._build_match_summary(
             course_matches,
             match_scope="course",
-            requested_with_sections=bool(requested_section_pairs),
+            requested_with_sections=bool(requested_prof_pairs),
         )
 
         return {
@@ -556,7 +545,7 @@ class V2FeatureService:
         difficulty_payload = [
             {
                 "course_code": item.course_code,
-                "crn": item.crn,
+                "login_docente": item.login_docente,
                 "credits": item.credits,
                 "difficulty_rate": item.difficulty_rate,
                 "source_level": item.source_level,
@@ -571,7 +560,7 @@ class V2FeatureService:
             "course_selection": [
                 {
                     "course_code": selection.course_code,
-                    "crn": selection.crn,
+                    "login_docente": selection.login_docente,
                 }
                 for selection in course_selections
             ],

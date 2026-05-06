@@ -1,10 +1,13 @@
 import pandas as pd
 import numpy as np
 import warnings
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
-df_rendimiento = pd.read_parquet('models/historial_rendimiento_academico_estudiante_anonymized.parquet')
-df_info_actual = pd.read_parquet('models/informacion_actual_estudiante_anonymized.parquet')
+DATA_DIR = Path(__file__).resolve().parents[1] / 'data'
+
+df_rendimiento = pd.read_parquet(DATA_DIR / 'historial_rendimiento_academico_estudiante_anonymized.parquet')
+df_info_actual = pd.read_parquet(DATA_DIR / 'informacion_actual_estudiante_anonymized.parquet')
 
 df_rendimiento['PERIODO'] = df_rendimiento['PERIODO'].astype(int)
 df_info_actual['PERIODO'] = df_info_actual['PERIODO'].astype(int)

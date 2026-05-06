@@ -36,7 +36,7 @@ function formatDifficultyLabel(rate: number) {
 function levelLabel(level: string) {
   switch (level) {
     case 'N3':
-      return 'N3 (curso + profesor)';
+      return 'N3 (curso + login docente)';
     case 'N2':
       return 'N2 (curso)';
     case 'N1':
@@ -156,7 +156,7 @@ export default function Home() {
           estudiante_id: confirmedStudent,
           cursos: selectedCourses.map((course) => ({
             course_code: course.course_code,
-            crn: course.crn || undefined,
+            login_docente: course.login_docente || undefined,
           })),
           periodo: selectedPeriod ?? undefined,
         });
@@ -270,7 +270,7 @@ export default function Home() {
         return;
       }
 
-      setSelectedCourses((prev) => [...prev, { course_code: idToSearch, credits, crn: '' }]);
+      setSelectedCourses((prev) => [...prev, { course_code: idToSearch, credits, login_docente: '' }]);
       setCourseInput('');
       setShowCourseDropdown(false);
     } finally {
@@ -278,11 +278,11 @@ export default function Home() {
     }
   };
 
-  const updateCourseCrn = (courseCode: string, value: string) => {
+  const updateCourseLoginDocente = (courseCode: string, value: string) => {
     setSelectedCourses((prev) =>
       prev.map((course) =>
         course.course_code === courseCode
-          ? { ...course, crn: value }
+          ? { ...course, login_docente: value }
           : course,
       ),
     );
@@ -299,7 +299,7 @@ export default function Home() {
       estudiante_id: confirmedStudent,
       cursos: selectedCourses.map((course) => ({
         course_code: course.course_code,
-        crn: course.crn?.trim() ? course.crn.trim() : undefined,
+        login_docente: course.login_docente?.trim() ? course.login_docente.trim() : undefined,
       })),
       creditos: totalCredits,
       periodo: selectedPeriod ?? undefined,
@@ -439,14 +439,14 @@ export default function Home() {
                         Quitar
                       </Button>
                     </div>
-                    <Form.Label className="small text-muted mb-1">CRN de la sección (opcional)</Form.Label>
+                    <Form.Label className="small text-muted mb-1">Login del docente (opcional)</Form.Label>
                     <Form.Control
-                      placeholder="Ej: 12345"
-                      value={course.crn ?? ''}
-                      onChange={(e) => updateCourseCrn(course.course_code, e.target.value)}
+                      placeholder="Ej: jperez"
+                      value={course.login_docente ?? ''}
+                      onChange={(e) => updateCourseLoginDocente(course.course_code, e.target.value)}
                     />
                     <div className="small text-muted mt-1">
-                      Si indicas el CRN, la dificultad puede calcularse al nivel mas especifico del curso.
+                      Si indicas el login del docente, la dificultad puede calcularse al nivel mas especifico (curso + profesor).
                     </div>
                   </div>
                 ))}
@@ -486,7 +486,7 @@ export default function Home() {
                     <thead>
                       <tr>
                         <th>Curso</th>
-                        <th>CRN de sección</th>
+                        <th>Login docente</th>
                         <th>Créditos</th>
                         <th>Tasa</th>
                         <th>Lectura</th>
@@ -495,9 +495,9 @@ export default function Home() {
                     </thead>
                     <tbody>
                       {preview.difficulty_courses.map((course) => (
-                        <tr key={`${course.course_code}-${course.crn ?? 'base'}`}>
+                        <tr key={`${course.course_code}-${course.login_docente ?? 'base'}`}>
                           <td><code>{course.course_code}</code></td>
-                          <td>{course.crn || 'No especificado'}</td>
+                          <td>{course.login_docente || 'No especificado'}</td>
                           <td>{course.credits}</td>
                           <td>{(course.difficulty_rate * 100).toFixed(1)}%</td>
                           <td>{formatDifficultyLabel(course.difficulty_rate).title}</td>
@@ -552,11 +552,11 @@ export default function Home() {
             La dificultad se estima con la tasa histórica de aprobación. Una tasa menor implica un curso más exigente.
           </p>
           <p>
-            El sistema intenta usar primero la información más específica disponible: curso con CRN de sección,
+            El sistema intenta usar primero la información más específica disponible: curso con login del docente,
             luego curso, después departamento y, si no hay soporte suficiente, el promedio global.
           </p>
           <p className="mb-0">
-            Para el histórico de combinaciones, si indicas el CRN de la sección se intentan encontrar coincidencias a
+            Para el histórico de combinaciones, si indicas el login del docente se intentan encontrar coincidencias a
             ese nivel. Si no existen, se sigue mostrando el histórico por código de curso.
           </p>
         </Modal.Body>

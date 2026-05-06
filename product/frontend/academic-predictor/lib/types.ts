@@ -11,12 +11,12 @@ export interface StudentLookupResponse {
 
 export interface CourseSelection {
   course_code: string;
-  crn?: string | null;
+  login_docente?: string | null;
 }
 
 export interface DifficultyCourse {
   course_code: string;
-  crn?: string | null;
+  login_docente?: string | null;
   credits: number;
   difficulty_rate: number;
   source_level: 'N3' | 'N2' | 'N1' | 'GLOBAL' | string;

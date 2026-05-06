@@ -17,9 +17,13 @@ Leakage safety: all rates are computed from strictly prior periods only.
 import numpy as np
 import pandas as pd
 
-STUDENT_COL = 'ID_PERSONA'
+STUDENT_COL = 'CODIGO_ESTUDIANTE'
 
 DEFAULT_THRESHOLDS = {'NIVEL_3': 20, 'NIVEL_2': 10, 'NIVEL_1': 5}
+
+# Section is identified by (PERIODO, CODIGO_CURSO, SECCION). This works for
+# both anonymized and non-anonymized datasets — no dependency on ID_CRN.
+SECTION_KEY_COLS = ['PERIODO', 'CODIGO_CURSO', 'SECCION']
 
 
 def _compute_rate_tables(df_cursos_hist, df_oferta, thresholds):
@@ -100,18 +104,17 @@ def _compute_rate_tables(df_cursos_hist, df_oferta, thresholds):
     return rates_n3, rates_n2, rates_n1, global_rate
 
 
-def _assign_difficulty(row, crn_to_prof, rates_n3, rates_n2, rates_n1,
+def _assign_difficulty(row, rates_n3, rates_n2, rates_n1,
                        curso_dept, global_rate):
     """Assign difficulty rate to a single course enrollment with cascading fallback.
 
     Returns (rate, level_used).
     """
     curso = row['CODIGO_CURSO']
-    crn = row.get('ID_CRN')
+    prof = row.get('LOGIN_DOCENTE')
 
     # Try NIVEL_3: course + professor
-    prof = crn_to_prof.get(crn) if crn is not None else None
-    if prof is not None:
+    if prof is not None and not (isinstance(prof, float) and pd.isna(prof)):
         key = (curso, prof)
         if key in rates_n3:
             return rates_n3[key], 'NIVEL_3'
@@ -146,9 +149,9 @@ def build_difficulty_features(
     Parameters
     ----------
     df_materias_clean : DataFrame
-        Output of preprocess_materias (filtered, with ID_CRN).
+        Output of preprocess_materias (filtered).
     df_cursos_profesores : DataFrame
-        Per-section course stats with TASA_APROBACION.
+        Per-section course stats with TASA_APROBACION and LOGIN_DOCENTE.
     df_oferta : DataFrame
         Course catalog with CODIGO_DEPARTAMENTO.
     thresholds : dict
@@ -156,18 +159,22 @@ def build_difficulty_features(
 
     Returns
     -------
-    DataFrame with columns: [ID_PERSONA, PERIODO, DIFF_MEAN_WEIGHTED, DIFF_MIN, DIFF_STD]
+    DataFrame with columns: [CODIGO_ESTUDIANTE, PERIODO, DIFF_MEAN_WEIGHTED, DIFF_MIN, DIFF_STD]
     """
     if thresholds is None:
         thresholds = DEFAULT_THRESHOLDS
 
-    # Build CRN → professor lookup
-    crn_to_prof = (
-        df_cursos_profesores
-        .drop_duplicates(subset=['ID_CRN'], keep='first')
-        .set_index('ID_CRN')['LOGIN_DOCENTE']
-        .to_dict()
-    )
+    # Enrich materias with LOGIN_DOCENTE via the stable section key
+    # (PERIODO, CODIGO_CURSO, SECCION). This avoids any dependency on ID_CRN.
+    if 'LOGIN_DOCENTE' not in df_materias_clean.columns:
+        prof_lookup = (
+            df_cursos_profesores[SECTION_KEY_COLS + ['LOGIN_DOCENTE']]
+            .dropna(subset=SECTION_KEY_COLS)
+            .drop_duplicates(subset=SECTION_KEY_COLS, keep='first')
+        )
+        df_materias_clean = df_materias_clean.merge(
+            prof_lookup, on=SECTION_KEY_COLS, how='left',
+        )
 
     # Course → department lookup
     curso_dept = (
@@ -209,8 +216,8 @@ def build_difficulty_features(
             continue
 
         # Vectorized difficulty assignment (avoid row-by-row apply)
-        # Step 1: map CRN → professor, then build (curso, prof) key
-        df_period['_PROF'] = df_period['ID_CRN'].map(crn_to_prof)
+        # LOGIN_DOCENTE was already merged into df_materias_clean above.
+        df_period['_PROF'] = df_period.get('LOGIN_DOCENTE')
         df_period['_DEPT'] = df_period['CODIGO_CURSO'].map(curso_dept)
 
         # Step 2: look up rates at each level

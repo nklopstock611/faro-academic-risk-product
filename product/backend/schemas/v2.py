@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class CourseSelectionInput(BaseModel):
     course_code: str
-    crn: str | None = None
+    login_docente: str | None = None
 
 
 class HistoricalMatchSummary(BaseModel):
@@ -31,7 +31,7 @@ class DifficultyPreviewRequest(BaseModel):
 
 class DifficultyCourseResponse(BaseModel):
     course_code: str
-    crn: str | None = None
+    login_docente: str | None = None
     credits: float
     difficulty_rate: float
     source_level: str

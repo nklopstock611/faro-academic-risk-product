@@ -33,7 +33,7 @@ FEATURE_COLS = FEATURE_COLS_BASE
 
 TARGET_COL = 'PCT_CREDITOS_APROBADOS'
 
-STUDENT_COL = 'ID_PERSONA'
+STUDENT_COL = 'CODIGO_ESTUDIANTE'
 
 
 # ---------------------------------------------------------------------------
@@ -54,13 +54,14 @@ def preprocess_materias(df_materias: pd.DataFrame, df_oferta: pd.DataFrame) -> p
         .copy()
     )
 
-    # Join via ID_CRN for precise section-level matching
+    # Join via CODIGO_CURSO so the pipeline works with both anonymized and
+    # non-anonymized datasets (CODIGO_CURSO is the stable course identifier).
     df_fac = (
-        df_oferta[['ID_CRN', 'CODIGO_DEPARTAMENTO', 'CODIGO_FACULTAD']]
-        .drop_duplicates(subset=['ID_CRN'], keep='first')
+        df_oferta[['CODIGO_CURSO', 'CODIGO_DEPARTAMENTO', 'CODIGO_FACULTAD']]
+        .drop_duplicates(subset=['CODIGO_CURSO'], keep='first')
     )
 
-    df_clean = df_clean.merge(df_fac, on='ID_CRN', how='left')
+    df_clean = df_clean.merge(df_fac, on='CODIGO_CURSO', how='left')
     return df_clean
 
 

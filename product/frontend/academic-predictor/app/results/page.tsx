@@ -215,7 +215,7 @@ export default function ResultsPage() {
         {hasSectionMatches && (
           <Col md={6}>
             <HistoricalDistributionCard
-              title="Histórico por CRN de secciones"
+              title="Histórico por login del docente"
               summary={result.historical_combination_summary.section_match}
             />
           </Col>
