@@ -7,6 +7,13 @@ import { Alert, Badge, Button, Card, Col, Row, Spinner } from 'react-bootstrap';
 import { predict } from '@/lib/api';
 import { HistoricalMatchSummary, PredictionResponse } from '@/lib/types';
 
+function confidenceBadgeBg(level?: string | null): 'success' | 'warning' | 'danger' | 'secondary' {
+  if (level === 'alta') return 'success';
+  if (level === 'media') return 'warning';
+  if (level === 'baja') return 'danger';
+  return 'secondary';
+}
+
 function difficultyLabel(rate: number) {
   if (rate < 0.75) {
     return 'Alta dificultad';
@@ -169,6 +176,18 @@ export default function ResultsPage() {
           <div className={`display-2 fw-bold ${result.at_risk ? 'text-danger' : 'text-success'}`}>
             {scorePercent}%
           </div>
+          {result.score_p10 != null && result.score_p90 != null && (
+            <div className="mt-3 d-flex justify-content-center align-items-center gap-2 flex-wrap">
+              <span className="text-muted small">
+                Rango plausible (p10–p90): <strong>{(result.score_p10 * 100).toFixed(0)}%–{(result.score_p90 * 100).toFixed(0)}%</strong>
+              </span>
+              {result.confidence_level && (
+                <Badge bg={confidenceBadgeBg(result.confidence_level)}>
+                  Confianza: {result.confidence_level}
+                </Badge>
+              )}
+            </div>
+          )}
           <p className="mt-3 mb-0 text-muted">{result.summary.message}</p>
         </Card.Body>
       </Card>

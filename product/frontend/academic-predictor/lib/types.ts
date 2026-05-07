@@ -82,6 +82,12 @@ export interface PredictionResponse {
   score: number;
   at_risk: boolean;
   threshold: number;
+  score_p10?: number | null;
+  score_p90?: number | null;
+  score_std?: number | null;
+  score_iqr?: number | null;
+  confidence_level?: 'alta' | 'media' | 'baja' | null;
+  neighbor_count?: number | null;
   feature_values: Record<string, number>;
   course_selection: CourseSelection[];
   difficulty_courses: DifficultyCourse[];

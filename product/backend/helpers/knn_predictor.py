@@ -33,18 +33,39 @@ class KNNPredictor(BasePredictor):
         self._k = k
         return self
 
+    def _aggregate(self, neighbor_y: np.ndarray, dists: np.ndarray) -> float:
+        if self.aggregation == 'median':
+            return float(np.median(neighbor_y))
+        if self.aggregation == 'distance':
+            w = 1.0 / (dists + 1e-10)
+            w /= w.sum()
+            return float(np.dot(w, neighbor_y))
+        return float(np.mean(neighbor_y))
+
     def predict(self, X_scaled: np.ndarray) -> np.ndarray:
         distances, indices = self._nn.kneighbors(X_scaled)
-        preds = []
+        preds = [self._aggregate(self._y_train[idx], dists)
+                 for dists, idx in zip(distances, indices)]
+        return np.clip(np.array(preds), 0.0, 1.0)
+
+    def predict_with_uncertainty(self, X_scaled: np.ndarray) -> list[dict]:
+        """Predict and expose neighbor-based uncertainty stats per row.
+
+        Returns a list of dicts with: score, p10, p90, std, iqr,
+        neighbor_count, mean_distance.
+        """
+        distances, indices = self._nn.kneighbors(X_scaled)
+        results = []
         for dists, idx in zip(distances, indices):
             neighbor_y = self._y_train[idx]
-            if self.aggregation == 'median':
-                pred = float(np.median(neighbor_y))
-            elif self.aggregation == 'distance':
-                w = 1.0 / (dists + 1e-10)
-                w /= w.sum()
-                pred = float(np.dot(w, neighbor_y))
-            else:  # mean
-                pred = float(np.mean(neighbor_y))
-            preds.append(pred)
-        return np.clip(np.array(preds), 0.0, 1.0)
+            score = float(np.clip(self._aggregate(neighbor_y, dists), 0.0, 1.0))
+            results.append({
+                'score': score,
+                'p10': float(np.clip(np.percentile(neighbor_y, 10), 0.0, 1.0)),
+                'p90': float(np.clip(np.percentile(neighbor_y, 90), 0.0, 1.0)),
+                'std': float(np.std(neighbor_y, ddof=1)) if len(neighbor_y) > 1 else 0.0,
+                'iqr': float(np.percentile(neighbor_y, 75) - np.percentile(neighbor_y, 25)),
+                'neighbor_count': int(len(neighbor_y)),
+                'mean_distance': float(np.mean(dists)),
+            })
+        return results
