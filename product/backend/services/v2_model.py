@@ -91,7 +91,21 @@ class V2PredictionService:
         X = np.array([ordered], dtype=float)
         if self.scaler is not None:
             X = self.scaler.transform(X)
-        score = float(self.model.predict(X)[0])
+
+        if hasattr(self.model, "predict_with_uncertainty"):
+            details = self.model.predict_with_uncertainty(X)[0]
+            score = details["score"]
+            p10 = details["p10"]
+            p90 = details["p90"]
+            std = details["std"]
+            iqr = details["iqr"]
+            neighbor_count = details["neighbor_count"]
+            confidence_level = _confidence_from_iqr(iqr)
+        else:
+            score = float(self.model.predict(X)[0])
+            p10 = p90 = std = iqr = None
+            neighbor_count = None
+            confidence_level = None
 
         return {
             "score": score,
@@ -101,7 +115,28 @@ class V2PredictionService:
             "feature_vector": ordered,
             "model_source": self.model_source,
             "model_version": self.model_version,
+            "score_p10": p10,
+            "score_p90": p90,
+            "score_std": std,
+            "score_iqr": iqr,
+            "confidence_level": confidence_level,
+            "neighbor_count": neighbor_count,
         }
+
+
+# IQR thresholds on PCT_CREDITOS_APROBADOS (range 0-1).
+CONFIDENCE_IQR_HIGH = 0.10
+CONFIDENCE_IQR_MEDIUM = 0.25
+
+
+def _confidence_from_iqr(iqr: float | None) -> str | None:
+    if iqr is None:
+        return None
+    if iqr <= CONFIDENCE_IQR_HIGH:
+        return "alta"
+    if iqr <= CONFIDENCE_IQR_MEDIUM:
+        return "media"
+    return "baja"
 
 
 @lru_cache(maxsize=1)

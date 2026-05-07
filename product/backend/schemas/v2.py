@@ -69,6 +69,12 @@ class V2PredictionResponse(BaseModel):
     score: float
     at_risk: bool
     threshold: float
+    score_p10: float | None = None
+    score_p90: float | None = None
+    score_std: float | None = None
+    score_iqr: float | None = None
+    confidence_level: str | None = None
+    neighbor_count: int | None = None
     feature_values: dict[str, float]
     course_selection: list[CourseSelectionInput]
     difficulty_courses: list[DifficultyCourseResponse]

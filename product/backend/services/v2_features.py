@@ -404,56 +404,67 @@ class V2FeatureService:
     ) -> dict[str, Any]:
         resolved_period = self._resolve_period(period)
         selected_codes = sorted({selection.course_code for selection in course_selections})
-        course_signature = "|".join(selected_codes)
 
-        materias_cols = ["CODIGO_ESTUDIANTE", "PERIODO", "CODIGO_CURSO"]
-        if "LOGIN_DOCENTE" in self.df_materias.columns:
-            materias_cols.append("LOGIN_DOCENTE")
-        semester_courses = self.df_materias[
-            self.df_materias["CODIGO_CURSO"].isin(selected_codes)
-            & (self.df_materias["PERIODO"] < resolved_period)
-        ][materias_cols].copy()
-        if "LOGIN_DOCENTE" not in semester_courses.columns:
-            semester_courses["LOGIN_DOCENTE"] = None
-        semester_courses["PROF_KEY"] = semester_courses["LOGIN_DOCENTE"].map(
-            self._normalize_optional_text
-        )
-
-        grouped = (
-            semester_courses.groupby(["CODIGO_ESTUDIANTE", "PERIODO"], sort=False)
-            .agg(
-                COURSE_CODES=("CODIGO_CURSO", lambda values: tuple(sorted({str(value) for value in values}))),
-                PROF_PAIR_SET=(
-                    "LOGIN_DOCENTE",
-                    lambda _: set(),
-                ),
-            )
-            .reset_index()
-        )
-
-        pair_summary = (
-            semester_courses.groupby(["CODIGO_ESTUDIANTE", "PERIODO"], sort=False)
-            .apply(
-                lambda frame: pd.Series(
-                    {
-                        "PROF_PAIR_SET": {
-                            f"{row.CODIGO_CURSO}::{row.PROF_KEY}"
-                            for row in frame.itertuples()
-                            if row.PROF_KEY
-                        },
-                    }
+        # Subset match: find (student, period) pairs that took *all* the
+        # requested courses, regardless of what else they took that semester.
+        # Computed as the intersection of the per-course (student, period) sets
+        # via successive inner merges — much faster than a Python-side subset
+        # check across every group.
+        prior = self.df_materias[self.df_materias["PERIODO"] < resolved_period]
+        keys_by_course = [
+            prior[prior["CODIGO_CURSO"] == code][["CODIGO_ESTUDIANTE", "PERIODO"]].drop_duplicates()
+            for code in selected_codes
+        ]
+        if any(df.empty for df in keys_by_course):
+            match_keys = pd.DataFrame(columns=["CODIGO_ESTUDIANTE", "PERIODO"])
+        else:
+            match_keys = keys_by_course[0]
+            for other in keys_by_course[1:]:
+                match_keys = match_keys.merge(
+                    other, on=["CODIGO_ESTUDIANTE", "PERIODO"], how="inner",
                 )
-            )
-            .reset_index()
-        )
 
-        grouped = grouped.drop(columns=["PROF_PAIR_SET"]).merge(
-            pair_summary,
-            on=["CODIGO_ESTUDIANTE", "PERIODO"],
-            how="left",
-        )
-        grouped["COURSE_SIGNATURE"] = grouped["COURSE_CODES"].map(lambda values: "|".join(values))
-        course_matches = grouped[grouped["COURSE_SIGNATURE"] == course_signature]
+        # PROF_PAIR_SET is only needed when the caller asked for a specific
+        # professor on at least one course; otherwise skip the work.
+        requested_prof_pairs = {
+            f"{selection.course_code}::{selection.login_docente}"
+            for selection in course_selections
+            if selection.login_docente
+        }
+
+        if match_keys.empty:
+            course_matches = pd.DataFrame(columns=["CODIGO_ESTUDIANTE", "PERIODO", "PROF_PAIR_SET"])
+        elif not requested_prof_pairs:
+            course_matches = match_keys.copy()
+            course_matches["PROF_PAIR_SET"] = [set() for _ in range(len(match_keys))]
+        else:
+            materias_cols = ["CODIGO_ESTUDIANTE", "PERIODO", "CODIGO_CURSO"]
+            if "LOGIN_DOCENTE" in self.df_materias.columns:
+                materias_cols.append("LOGIN_DOCENTE")
+            requested_in_match = prior[prior["CODIGO_CURSO"].isin(selected_codes)][materias_cols].merge(
+                match_keys, on=["CODIGO_ESTUDIANTE", "PERIODO"], how="inner",
+            )
+            if "LOGIN_DOCENTE" not in requested_in_match.columns:
+                requested_in_match["LOGIN_DOCENTE"] = None
+            requested_in_match["PROF_KEY"] = requested_in_match["LOGIN_DOCENTE"].map(
+                self._normalize_optional_text
+            )
+            requested_in_match = requested_in_match[requested_in_match["PROF_KEY"].notna()].copy()
+            requested_in_match["PAIR"] = (
+                requested_in_match["CODIGO_CURSO"].astype(str) + "::" + requested_in_match["PROF_KEY"].astype(str)
+            )
+            prof_pairs = (
+                requested_in_match.groupby(["CODIGO_ESTUDIANTE", "PERIODO"], sort=False)["PAIR"]
+                .agg(set)
+                .reset_index()
+                .rename(columns={"PAIR": "PROF_PAIR_SET"})
+            )
+            course_matches = match_keys.merge(
+                prof_pairs, on=["CODIGO_ESTUDIANTE", "PERIODO"], how="left",
+            )
+            course_matches["PROF_PAIR_SET"] = course_matches["PROF_PAIR_SET"].apply(
+                lambda v: v if isinstance(v, set) else set()
+            )
 
         outcome_cols = [
             "CODIGO_ESTUDIANTE",
@@ -485,11 +496,6 @@ class V2FeatureService:
         ].sum(axis=1, min_count=1)
 
         section_summary = None
-        requested_prof_pairs = {
-            f"{selection.course_code}::{selection.login_docente}"
-            for selection in course_selections
-            if selection.login_docente
-        }
         if requested_prof_pairs:
             section_matches = course_matches[
                 course_matches.apply(

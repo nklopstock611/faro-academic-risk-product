@@ -100,6 +100,12 @@ def predecir_v2(request: V2PredictionRequest):
         score=prediction["score"],
         at_risk=prediction["at_risk"],
         threshold=prediction["threshold"],
+        score_p10=prediction.get("score_p10"),
+        score_p90=prediction.get("score_p90"),
+        score_std=prediction.get("score_std"),
+        score_iqr=prediction.get("score_iqr"),
+        confidence_level=prediction.get("confidence_level"),
+        neighbor_count=prediction.get("neighbor_count"),
         feature_values={
             key: float(value)
             for key, value in feature_bundle["feature_values"].items()
