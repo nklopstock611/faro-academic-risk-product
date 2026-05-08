@@ -124,9 +124,9 @@ def predecir_v2(request: V2PredictionRequest):
         summary={
             "risk_label": risk_label,
             "message": (
-                "Prediccion de riesgo activada"
+                "Predicción de riesgo activada"
                 if prediction["at_risk"]
-                else "Prediccion de exito esperada"
+                else "Predicción de exito esperada"
             ),
             "total_courses": len(feature_bundle["course_selection"]),
             "total_credits": float(
